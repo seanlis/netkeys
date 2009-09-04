@@ -1,12 +1,25 @@
-// NetworkKeys.cpp : Defines the entry point for the console application.
-//
+/*
+ * Copyright (c) 2009 Matthew Iselin
+ *
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
 
-#include <winsock2.h>
-
+// netkeys targets a minimum platform of Windows 2000
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0500 // Minimum platform is Win 2000
 #endif
 
+#include <winsock2.h>
 #include <windows.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -18,59 +31,129 @@
 
 using namespace std;
 
+/**
+ * MESSAGE_MAGIC serves two purposes: one, ensuring the correct structures
+ * are in use, and two, ensuring that these structures are not malformed.
+ */
 #define MESSAGE_MAGIC   0xdeadbeef
+
+/**
+ * These two definitions are merely codes for each message between the two
+ * hosts.
+ */
 #define MESSAGE_KEYUP   0x00000001
 #define MESSAGE_KEYDOWN 0x00000002
 
+/// \todo Specify port on the command line
 #define SYSTEM_PORT     23000
 
+/**
+ * Packet structure for the key press/release message transfer.
+ */
 struct keyMessage
 {
     DWORD magic;
     DWORD code;
 };
 
+/**
+ * Low-level keyboard hook. Global so it can be deleted via an atexit setup
+ * rather than requiring a full message pump with special WM_CLOSE handling.
+ */
 HHOOK myHook = NULL;
+
+/**
+ * Global network socket.
+ *
+ * Probably not the greatest way in the world to do things. I'd like to C++
+ * this up a bit.
+ */
 int mySocket = -1;
-string destIp = "";
+
+/**
+ * Remote IP for all networking.
+ */
+string remoteIp = "";
+
+/**
+ * Horrible, horrible, horrible method of figuring out whether we need to
+ * send a message to the client. std::map for *all* VK_ codes would be *far*
+ * more efficient, and it looks nicer too.
+ */
 volatile bool isDown = false;
 
-// Function prototypes
-LRESULT __declspec(dllexport)__stdcall  CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
+/** KeyboardProc: Low-level keyboard hook handler */
+LRESULT __declspec(dllexport)__stdcall  CALLBACK KeyboardProc(int nCode,
+                                                              WPARAM wParam,
+                                                              LPARAM lParam);
+
+/** death: atexit routine */
 void death();
+
+/** initWinsock: Initialises Windows sockets */
+/// \todo Move into a class!
 int initWinsock();
+
+/** getSocket: Set & return mySocket if not set, return it if so. */
 int getSocket();
+
+/** startListen: Listen on the given port (don't use) */
 int startListen(int port);
+
+/**
+ * connectRemote
+ *
+ * "Connect" to the given host on the given port. Because this is all done over
+ * UDP this is more or less defining the IP with which we'll be performing send
+ * and recv operations.
+ */
 int connectRemote(const char *host, int port);
+
+/** sendMessage: Sends the given message. */
 int sendMessage(const char *msg, int len);
+
+/** recvMessage: Blocks and receives a message */
 int recvMessage(char *buff, int msglen);
+
+/** returnSocket: Cleans up mySocket */
 int returnSocket();
+
+/** destroyWinsock: Cleans up Windows Sockets */
 int destroyWinsock();
 
-// Normal run: hook and send PTT presses
+/**
+ * hookAndSend
+ *
+ * This function is the "server" side of things. It creates a low-level
+ * keyboard hook that is used to pick up every key the user presses.
+ * Basically, it dumps a little bit of information to the console and then
+ * takes over the Windows message pump for the console.
+ */
 void hookAndSend()
 {
-    connectRemote(destIp.c_str(), SYSTEM_PORT);
+    connectRemote(remoteIp.c_str(), SYSTEM_PORT);
 
     // Grab our window handle
     HWND hWnd = GetConsoleWindow();
     HINSTANCE hInst = (HINSTANCE) GetWindowLong(hWnd, GWL_HINSTANCE);
 
     // Spruce up the window
-    SetConsoleTitle("PTT Forwarder");
+    SetConsoleTitle("netkeys");
 
     // Install the hook
     myHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, hInst, 0);
     if(!myHook)
     {
-        cout << "Obtaining the keyboard hook failed. Press any key to continue." << endl;
+        cerr << "Obtaining the keyboard hook failed." << endl;
+        cerr << "Press any key to continue." << endl;
         _getch();
         return;
     }
 
     // Tell the user what's happening
-    cout << "PTT Forwarder is now running. Any press of your PTT will now be sent to your secondary computer." << endl;
-    cout << "Just close this window when you're done, it'll automatically shut everything down." << endl;
+    cout << "netkeys is now running." << endl;
+    cout << "Just close this window when you're done." << endl;
+    cout << "I'll automatically shut everything down." << endl;
 
     // Main message pump
     MSG msg;
@@ -84,8 +167,19 @@ void hookAndSend()
 	return;
 }
 
-// Client run: just listen out for the down/up messages and handle them
-void listenForPtt()
+/**
+ * listenForKeys
+ *
+ * This function is the "client" side of things. It merely listens for any
+ * incoming key messages, ensures that they're valid, and then injects them
+ * into the host key press queue.
+ */
+/// \todo Allow the user to type something like "quit" or whatever to exit,
+///       perhaps via a small command-line monitor to also see some statistics
+/// \todo It's real easy to kill things right now: just exit the client while
+///       holding down a key on the host to find out why (the key remains held
+///       down, as the keyup event is never received).
+void listenForKeys()
 {
     startListen(SYSTEM_PORT);
 
@@ -94,7 +188,9 @@ void listenForPtt()
     {
         if(s.magic != MESSAGE_MAGIC)
         {
-            cerr << "Got a bad packet [magic=" << cerr.hex << s.magic << cerr.dec << "]" << endl;
+            /// \todo Better error-handling, more consistent, etc...
+            cerr << "netkeys: non-fatal: Got a bad packet." << endl;
+            cerr << "packet magic: " << hex << s.magic << dec << "]" << endl;
             continue;
         }
 
@@ -121,16 +217,18 @@ int main(int argc, char* argv[])
     // Initialise Winsock and grab a socket
     if(initWinsock())
     {
-        cout << "Couldn't initialise the socket layer. Press any key to exit." << endl;
+        cerr << "Couldn't initialise the socket layer." << endl;
+        cerr << "Press any key to exit." << endl;
         _getch();
         return 1;
     }
     getSocket();
 
-    // Install the unhooker to run when we die
+    // Install cleanup to run when we die
     atexit(death);
 
     // Check for and handle input parameters
+    /// \todo C++ify
     bool bClient = false;
     for(int i = 1; i < argc; i++)
     {
@@ -142,7 +240,7 @@ int main(int argc, char* argv[])
         {
             if((i + 1) < argc)
             {
-                destIp = argv[i + 1];
+                remoteIp = argv[i + 1];
                 i++;
             }
             else
@@ -153,7 +251,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    if(destIp == "")
+    if(remoteIp == "")
     {
         cout << "No IP specified, quitting." << endl;
         return 1;
@@ -162,7 +260,7 @@ int main(int argc, char* argv[])
     // Client?
     if(bClient)
     {
-        listenForPtt();
+        listenForKeys();
         returnSocket();
         destroyWinsock();
     }
@@ -172,7 +270,9 @@ int main(int argc, char* argv[])
     return 0;
 }
 
-LRESULT __declspec(dllexport)__stdcall  CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
+LRESULT __declspec(dllexport)__stdcall  CALLBACK KeyboardProc(int nCode,
+                                                              WPARAM wParam,
+                                                              LPARAM lParam)
 {
     if(nCode == HC_ACTION)
     {
@@ -226,7 +326,7 @@ int initWinsock()
     if (err != 0) {
         /* Tell the user that we could not find a usable */
         /* Winsock DLL.                                  */
-        cout << "WSAStartup failed with error: " << err << endl;
+        cerr << "WSAStartup failed with error: " << err << endl;
         return 1;
     }
 
@@ -239,7 +339,7 @@ int initWinsock()
     if (LOBYTE(wsaData.wVersion) != 2 || HIBYTE(wsaData.wVersion) != 2) {
         /* Tell the user that we could not find a usable */
         /* WinSock DLL.                                  */
-        cout << "Could not find a usable version of Winsock.dll" << endl;
+        cerr << "Could not find a usable version of Winsock.dll" << endl;
         WSACleanup();
         return 1;
     }
