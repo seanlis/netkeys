@@ -90,8 +90,13 @@ LRESULT __declspec(dllexport)__stdcall  CALLBACK KeyboardProc(int nCode,
 /** death: atexit routine */
 void death();
 
-/** initWinsock: Initialises Windows sockets */
-/// \todo Move into a class!
+/**
+ * initWinsock
+ *
+ * Initialises Windows sockets
+ * \todo Move into a class!
+ */
+/// 
 int initWinsock();
 
 /** getSocket: Set & return mySocket if not set, return it if so. */
@@ -173,12 +178,13 @@ void hookAndSend()
  * This function is the "client" side of things. It merely listens for any
  * incoming key messages, ensures that they're valid, and then injects them
  * into the host key press queue.
+ *
+ * \todo Allow the user to type something like "quit" or whatever to exit,
+ *       perhaps via a small command-line monitor to also see some statistics
+ * \todo It's real easy to kill things right now: just exit the client while
+ *       holding down a key on the host to find out why (the key remains held
+ *       down, as the keyup event is never received).
  */
-/// \todo Allow the user to type something like "quit" or whatever to exit,
-///       perhaps via a small command-line monitor to also see some statistics
-/// \todo It's real easy to kill things right now: just exit the client while
-///       holding down a key on the host to find out why (the key remains held
-///       down, as the keyup event is never received).
 void listenForKeys()
 {
     startListen(SYSTEM_PORT);
