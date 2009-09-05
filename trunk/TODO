@@ -1,0 +1,4 @@
+Netkeys TODO List
+-----------------
+* Add more key code support
+* Clean up the code a little - sockets -> classes for instance
