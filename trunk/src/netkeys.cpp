@@ -28,6 +28,7 @@
 #include <string>
 #include <iostream>
 #include <string>
+#include <map>
 
 using namespace std;
 
@@ -54,6 +55,20 @@ struct keyMessage
 {
     DWORD magic;
     DWORD code;
+    DWORD key;
+};
+
+/**
+ * Translation from string to a VK_ keycode (Windows-specific). These will be
+ * converted into a std::map and used to determine the set of keys to transmit.
+ */
+struct keyTranslation
+{
+    string keyName;
+    DWORD vkCode;
+    bool shouldRetransmit;
+} myTranslations[] = {
+#include "win_keytrans.h"
 };
 
 /**
@@ -81,6 +96,18 @@ string remoteIp = "";
  * more efficient, and it looks nicer too.
  */
 volatile bool isDown = false;
+
+/** Map of keys to transmit */
+map<DWORD, bool> keysToTransmit;
+
+/** Map of strings -> virtual key codes */
+map<string, DWORD> keyTranslations;
+
+/** Key states (to determine whether or not to send another message */
+map<DWORD, bool> keyState;
+
+/** Whether or not to avoid retransmitting KEYDOWN events */
+map<DWORD, bool> keyRetransmit;
 
 /** KeyboardProc: Low-level keyboard hook handler */
 LRESULT __declspec(dllexport)__stdcall  CALLBACK KeyboardProc(int nCode,
@@ -207,8 +234,8 @@ void listenForKeys()
         myInput.dwExtraInfo = 0;
         myInput.dwFlags = KEYEVENTF_EXTENDEDKEY;
         myInput.time = 0;
-        myInput.wVk = VK_RCONTROL;
-        myInput.wScan = 0x1D;
+        myInput.wVk = (WORD) s.key;
+        myInput.wScan = MapVirtualKey(s.key, MAPVK_VK_TO_VSC);
 
         if(s.code == MESSAGE_KEYUP)
             myInput.dwFlags |= KEYEVENTF_KEYUP;
@@ -233,6 +260,13 @@ int main(int argc, char* argv[])
     // Install cleanup to run when we die
     atexit(death);
 
+    // Setup the translation map
+    for(int i = 0; i < (sizeof(myTranslations) / sizeof(myTranslations[0])); i++)
+    {
+        keyTranslations[myTranslations[i].keyName] = myTranslations[i].vkCode;
+        keyRetransmit[myTranslations[i].vkCode] = myTranslations[i].shouldRetransmit;
+    }
+
     // Check for and handle input parameters
     /// \todo C++ify
     bool bClient = false;
@@ -254,6 +288,16 @@ int main(int argc, char* argv[])
                 cout << "The 'ip' argument requires an IP." << endl;
                 return 1;
             }
+        }
+        else
+        {
+            // If it's in the translation map, add it to the list of keys we
+            // are to transmit
+            DWORD vkCode = keyTranslations[string(argv[i])];
+            if(vkCode)
+                keysToTransmit[vkCode] = true;
+
+            cout << "Key translation for '" << string(argv[i]) << "': " << keyTranslations[string(argv[i])] << endl;
         }
     }
 
@@ -283,16 +327,17 @@ LRESULT __declspec(dllexport)__stdcall  CALLBACK KeyboardProc(int nCode,
     if(nCode == HC_ACTION)
     {
         KBDLLHOOKSTRUCT *p = (KBDLLHOOKSTRUCT*) lParam;
-        if(p->vkCode == VK_RCONTROL)
+        if(keysToTransmit[p->vkCode])
         {
             if(wParam == WM_KEYDOWN)
             {
-                if(!isDown)
+                if(keyRetransmit[p->vkCode] || !keyState[p->vkCode])
                 {
-                    isDown = true;
+                    keyState[p->vkCode] = true;
                     struct keyMessage s;
                     s.code = MESSAGE_KEYDOWN;
                     s.magic = MESSAGE_MAGIC;
+                    s.key = p->vkCode;
                     sendMessage((const char*) &s, sizeof(s));
                 }
             }
@@ -301,9 +346,10 @@ LRESULT __declspec(dllexport)__stdcall  CALLBACK KeyboardProc(int nCode,
                 struct keyMessage s;
                 s.code = MESSAGE_KEYUP;
                 s.magic = MESSAGE_MAGIC;
+                s.key = p->vkCode;
                 sendMessage((const char*) &s, sizeof(s));
 
-                isDown = false;
+                keyState[p->vkCode] = false;
             }
         }
     }
