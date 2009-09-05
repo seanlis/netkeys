@@ -14,7 +14,18 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#ifdef WIN32
+#if defined(__linux__) || defined(linux) /// \todo This isn't exhaustive
+#define _LINUX
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+
+#define SOCKET_ERROR (-1)
+
+#define SD_BOTH SHUT_RDWR
+#elif defined(WIN32)
 
 // netkeys targets a minimum platform of Windows 2000
 #ifndef _WIN32_WINNT
@@ -23,23 +34,54 @@
 
 #include <winsock2.h>
 #include <windows.h>
+#include <conio.h>
 
 #define HAVE_STRCPY_S
 #endif
 
 #include <stdlib.h>
 #include <stdio.h>
-#include <conio.h>
+#include <string.h>
 #include <time.h>
 #include <string>
 #include <iostream>
 #include <string>
 #include <map>
 
+#ifdef HAVE_STDINT_H
+#include <stdint.h>
+#endif
+
+#include <X11/Xlib.h>
+#include <X11/keysym.h>
+#include <X11/extensions/XTest.h>
+
 using namespace std;
 
 #ifndef HAVE_STRCPY_S
 #define strncpy_s(d, n, s, m) strncpy(d, s, m)
+#endif
+
+#ifndef HAVE_STRICMP
+int stricmp(const char *a, const char *b)
+{
+    while(*a && *b)
+    {
+        char ac = tolower(*a), bc = tolower(*b);
+        if(ac < bc)
+            return -1;
+        else if(ac > bc)
+            return 1;
+        a++; b++;
+    }
+    return 0;
+}
+#define _stricmp stricmp
+#endif
+
+#ifndef WIN32
+typedef uint32_t DWORD;
+typedef uint16_t WORD;
 #endif
 
 /**
@@ -85,16 +127,21 @@ struct keyTranslation
 } myTranslations[] = {
 #ifdef WIN32
 #include "win_keytrans.h"
-#elif defined(__linux__) || defined(linux) /// \todo This isn't exhaustive
+#elif defined(_LINUX)
 #include "x_keytrans.h"
 #endif
 };
 
+#ifdef WIN32
 /**
  * Low-level keyboard hook. Global so it can be deleted via an atexit setup
  * rather than requiring a full message pump with special WM_CLOSE handling.
  */
 HHOOK myHook = NULL;
+#elif defined(_LINUX)
+Display *myDisplay = NULL;
+Window rootWindow;
+#endif
 
 /**
  * Global network socket.
@@ -115,13 +162,6 @@ int myPort = SYSTEM_PORT;
  */
 string remoteIp = "";
 
-/**
- * Horrible, horrible, horrible method of figuring out whether we need to
- * send a message to the client. std::map for *all* VK_ codes would be *far*
- * more efficient, and it looks nicer too.
- */
-volatile bool isDown = false;
-
 /** Map of keys to transmit */
 map<DWORD, bool> keysToTransmit;
 
@@ -137,14 +177,11 @@ map<DWORD, bool> keyState;
 /** Whether or not to avoid retransmitting KEYDOWN events */
 map<DWORD, bool> keyRetransmit;
 
+#ifdef WIN32
 /** KeyboardProc: Low-level keyboard hook handler */
 LRESULT __declspec(dllexport)__stdcall  CALLBACK KeyboardProc(int nCode,
                                                               WPARAM wParam,
-                                                              LPARAM lParam);
-
-/** death: atexit routine */
-void death();
-
+                                                              LPARAM lParam);
 /**
  * initWinsock
  *
@@ -153,6 +190,14 @@ void death();
  */
 /// 
 int initWinsock();
+
+/** destroyWinsock: Cleans up Windows Sockets */
+int destroyWinsock();
+
+#endif
+
+/** death: atexit routine */
+void death();
 
 /** getSocket: Set & return mySocket if not set, return it if so. */
 int getSocket();
@@ -178,9 +223,6 @@ int recvMessage(char *buff, int msglen);
 /** returnSocket: Cleans up mySocket */
 int returnSocket();
 
-/** destroyWinsock: Cleans up Windows Sockets */
-int destroyWinsock();
-
 /**
  * hookAndSend
  *
@@ -192,6 +234,8 @@ int destroyWinsock();
 void hookAndSend()
 {
     connectRemote(remoteIp.c_str(), myPort);
+
+#ifdef WIN32
 
     // Grab our window handle
     HWND hWnd = GetConsoleWindow();
@@ -210,11 +254,24 @@ void hookAndSend()
         return;
     }
 
+#elif defined(_LINUX)
+    rootWindow = DefaultRootWindow(myDisplay);
+    for(map<DWORD, bool>::iterator it = keysToTransmit.begin();
+        it != keysToTransmit.end();
+        ++it)
+    {
+        KeyCode key = XKeysymToKeycode(myDisplay, (*it).first);
+        XGrabKey(myDisplay, key, AnyModifier, rootWindow, True, 
+                 GrabModeAsync, GrabModeAsync);
+    }
+#endif
+
     // Tell the user what's happening
     cout << "netkeys is now running." << endl;
     cout << "Just close this window when you're done." << endl;
     cout << "I'll automatically shut everything down." << endl;
 
+#ifdef WIN32
     // Main message pump
     MSG msg;
     while(GetMessage(&msg, hWnd, 0, 0))
@@ -222,6 +279,40 @@ void hookAndSend()
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
+#elif defined(_LINUX)
+    for(;;)
+    {
+        XEvent ev;
+    	XNextEvent(myDisplay, &ev);
+    	KeySym code = XKeycodeToKeysym(myDisplay, ev.xkey.keycode, 0);
+        if(keysToTransmit[code])
+        {
+    	    if(ev.type == KeyPress)
+    	    {
+                if(keyRetransmit[code] || !keyState[code])
+                {
+                    keyState[code] = true;
+                    
+                    struct keyMessage s;
+                    s.code = MESSAGE_KEYDOWN;
+                    s.magic = MESSAGE_MAGIC;
+                    strncpy_s(s.keyName, 32, vkTranslations[code].c_str(), 32);
+                    sendMessage((const char*) &s, sizeof(s));
+                }
+    	    }
+    	    else if(ev.type == KeyRelease)
+    	    {
+                struct keyMessage s;
+                s.code = MESSAGE_KEYUP;
+                s.magic = MESSAGE_MAGIC;
+                strncpy_s(s.keyName, 32, vkTranslations[code].c_str(), 32);
+                sendMessage((const char*) &s, sizeof(s));
+                
+                keyState[code] = false;
+    	    }
+    	}
+    }
+#endif
 
     // Shouldn't really get here
 	return;
@@ -255,6 +346,8 @@ void listenForKeys()
             continue;
         }
 
+        DWORD keyCode = keyTranslations[string(s.keyName)];
+#if WIN32
         INPUT wrapper;
         wrapper.type = INPUT_KEYBOARD;
 
@@ -262,7 +355,7 @@ void listenForKeys()
         myInput.dwExtraInfo = 0;
         myInput.dwFlags = KEYEVENTF_EXTENDEDKEY;
         myInput.time = 0;
-        myInput.wVk = (WORD) keyTranslations[string(s.keyName)];
+        myInput.wVk = (WORD) keyCode;
         myInput.wScan = MapVirtualKey(myInput.wVk, MAPVK_VK_TO_VSC);
 
         if(s.code == MESSAGE_KEYUP)
@@ -270,9 +363,20 @@ void listenForKeys()
 
         wrapper.ki = myInput;
         SendInput(1, &wrapper, sizeof(wrapper));
+#elif defined(_LINUX)
+	    unsigned int kc = XKeysymToKeycode(myDisplay, keyCode);
+	    
+	    // Avoid sending the character if it's to come up now
+	    if(s.code != MESSAGE_KEYUP)
+    	    XTestFakeKeyEvent(myDisplay, kc, True, 0);
+        if(s.code == MESSAGE_KEYUP)
+	        XTestFakeKeyEvent(myDisplay, kc, False, 0);
+	    XFlush(myDisplay);
+#endif
     }
 }
 
+#ifdef WIN32
 LRESULT __declspec(dllexport)__stdcall  CALLBACK KeyboardProc(int nCode,
                                                               WPARAM wParam,
                                                               LPARAM lParam)
@@ -308,16 +412,22 @@ LRESULT __declspec(dllexport)__stdcall  CALLBACK KeyboardProc(int nCode,
     }
     return CallNextHookEx(myHook, nCode, wParam, lParam);
 }
+#endif
 
 void death()
 {
+    returnSocket();
+#ifdef WIN32
     if(myHook)
         UnhookWindowsHookEx(myHook);
-
-    returnSocket();
+    
     destroyWinsock();
+#elif defined(_LINUX)
+    XCloseDisplay(myDisplay);
+#endif
 }
 
+#ifdef WIN32
 int initWinsock()
 {
     WORD wVersionRequested;
@@ -351,6 +461,7 @@ int initWinsock()
     else
         return 0;
 }
+#endif
 
 int getSocket()
 {
@@ -369,7 +480,7 @@ int startListen(int port)
     service.sin_family = AF_INET;
     service.sin_addr.s_addr = INADDR_ANY;
     service.sin_port = htons(port);
-    if(bind(mySocket, (SOCKADDR*) &service, sizeof(service)) == SOCKET_ERROR)
+    if(bind(mySocket, (sockaddr*) &service, sizeof(service)) == SOCKET_ERROR)
         return -1;
 
     return 0;
@@ -396,7 +507,7 @@ int connectRemote(const char *host, int port)
 
     service.sin_port = htons(port);
 
-    return connect(mySocket, (SOCKADDR*) &service, sizeof(service));
+    return connect(mySocket, (sockaddr*) &service, sizeof(service));
 }
 
 int sendMessage(const char *msg, int len)
@@ -420,18 +531,25 @@ int returnSocket()
     if(mySocket >= 0)
     {
         shutdown(mySocket, SD_BOTH);
+#ifdef WIN32
         closesocket(mySocket);
+#elif defined(_LINUX)
+        close(mySocket);
+#endif
     }
     return 0;
 }
 
+#ifdef WIN32
 int destroyWinsock()
 {
     return WSACleanup();
 }
+#endif
 
 int main(int argc, char* argv[])
 {
+#ifdef WIN32
     // Initialise Winsock and grab a socket
     if(initWinsock())
     {
@@ -440,7 +558,17 @@ int main(int argc, char* argv[])
         _getch();
         return 1;
     }
+#endif
     getSocket();
+
+#ifdef _LINUX
+    myDisplay = XOpenDisplay(0);
+    if(myDisplay == NULL)
+    {
+        cout << "Couldn't access the X server (display 0)." << endl;
+        return 1;
+    }
+#endif
 
     // Install cleanup to run when we die
     atexit(death);
@@ -552,7 +680,10 @@ int main(int argc, char* argv[])
         // We are the client, listen for key messages
         listenForKeys();
         returnSocket();
+
+#ifdef WIN32
         destroyWinsock();
+#endif
     }
     else
     {
