@@ -45,7 +45,7 @@ using namespace std;
 #define MESSAGE_KEYUP   0x00000001
 #define MESSAGE_KEYDOWN 0x00000002
 
-/// \todo Specify port on the command line
+/** Default port for all communication */
 #define SYSTEM_PORT     23000
 
 /**
@@ -84,6 +84,12 @@ HHOOK myHook = NULL;
  * this up a bit.
  */
 int mySocket = -1;
+
+/**
+ * Port on which to communicate. Defaults to myPort unless a port is
+ * specified on the command line.
+ */
+int myPort = SYSTEM_PORT;
 
 /**
  * Remote IP for all networking.
@@ -129,7 +135,7 @@ int initWinsock();
 /** getSocket: Set & return mySocket if not set, return it if so. */
 int getSocket();
 
-/** startListen: Listen on the given port (don't use) */
+/** startListen: Listen on the given port */
 int startListen(int port);
 
 /**
@@ -163,7 +169,7 @@ int destroyWinsock();
  */
 void hookAndSend()
 {
-    connectRemote(remoteIp.c_str(), SYSTEM_PORT);
+    connectRemote(remoteIp.c_str(), myPort);
 
     // Grab our window handle
     HWND hWnd = GetConsoleWindow();
@@ -214,7 +220,7 @@ void hookAndSend()
  */
 void listenForKeys()
 {
-    startListen(SYSTEM_PORT);
+    startListen(myPort);
 
     struct keyMessage s;
     while(recvMessage((char*) &s, sizeof(s)) != -1)
@@ -243,81 +249,6 @@ void listenForKeys()
         wrapper.ki = myInput;
         SendInput(1, &wrapper, sizeof(wrapper));
     }
-}
-
-int main(int argc, char* argv[])
-{
-    // Initialise Winsock and grab a socket
-    if(initWinsock())
-    {
-        cerr << "Couldn't initialise the socket layer." << endl;
-        cerr << "Press any key to exit." << endl;
-        _getch();
-        return 1;
-    }
-    getSocket();
-
-    // Install cleanup to run when we die
-    atexit(death);
-
-    // Setup the translation map
-    for(int i = 0; i < (sizeof(myTranslations) / sizeof(myTranslations[0])); i++)
-    {
-        keyTranslations[myTranslations[i].keyName] = myTranslations[i].vkCode;
-        keyRetransmit[myTranslations[i].vkCode] = myTranslations[i].shouldRetransmit;
-    }
-
-    // Check for and handle input parameters
-    /// \todo C++ify
-    bool bClient = false;
-    for(int i = 1; i < argc; i++)
-    {
-        if(_stricmp(argv[i], "--client") == 0)
-        {
-            bClient = true;
-        }
-        else if(_stricmp(argv[i], "--ip") == 0)
-        {
-            if((i + 1) < argc)
-            {
-                remoteIp = argv[i + 1];
-                i++;
-            }
-            else
-            {
-                cout << "The 'ip' argument requires an IP." << endl;
-                return 1;
-            }
-        }
-        else
-        {
-            // If it's in the translation map, add it to the list of keys we
-            // are to transmit
-            DWORD vkCode = keyTranslations[string(argv[i])];
-            if(vkCode)
-                keysToTransmit[vkCode] = true;
-
-            cout << "Key translation for '" << string(argv[i]) << "': " << keyTranslations[string(argv[i])] << endl;
-        }
-    }
-
-    if(remoteIp == "")
-    {
-        cout << "No IP specified, quitting." << endl;
-        return 1;
-    }
-
-    // Client?
-    if(bClient)
-    {
-        listenForKeys();
-        returnSocket();
-        destroyWinsock();
-    }
-    // No, we're not the client. Hook and serve.
-    else
-        hookAndSend();
-    return 0;
 }
 
 LRESULT __declspec(dllexport)__stdcall  CALLBACK KeyboardProc(int nCode,
@@ -475,4 +406,135 @@ int returnSocket()
 int destroyWinsock()
 {
     return WSACleanup();
+}
+
+int main(int argc, char* argv[])
+{
+    // Initialise Winsock and grab a socket
+    if(initWinsock())
+    {
+        cerr << "Couldn't initialise the socket layer." << endl;
+        cerr << "Press any key to exit." << endl;
+        _getch();
+        return 1;
+    }
+    getSocket();
+
+    // Install cleanup to run when we die
+    atexit(death);
+
+    // Setup the translation map
+    int i;
+    for(i = 0; i < (sizeof(myTranslations) / sizeof(myTranslations[0])); i++)
+    {
+        keyTranslations[myTranslations[i].keyName] = myTranslations[i].vkCode;
+        keyRetransmit[myTranslations[i].vkCode] = myTranslations[i].shouldRetransmit;
+    }
+
+    // Check for and handle input parameters
+    /// \todo C++ify
+    bool bClient = false;
+    for(i = 1; i < argc; i++)
+    {
+        if(_stricmp(argv[i], "--client") == 0)
+        {
+            bClient = true;
+        }
+        else if(_stricmp(argv[i], "--ip") == 0)
+        {
+            if((i + 1) < argc)
+            {
+                remoteIp = argv[i + 1];
+                i++;
+            }
+            else
+            {
+                cout << "The 'ip' argument requires an IP." << endl;
+                return 1;
+            }
+        }
+        else if(_stricmp(argv[i], "--port") == 0)
+        {
+            bool bValid = false;
+            if((i + 1) < argc)
+            {
+                myPort = atoi(argv[i + 1]);
+                i++;
+
+                if(myPort > 0 && myPort < 0xFFFF)
+                    bValid = true;
+            }
+
+            if(!bValid)
+            {
+                cout << "The 'port' argument requires a valid port." << endl;
+                return 1;
+            }
+        }
+        else if(_stricmp(argv[i], "--config") == 0)
+        {
+            /// \todo Read the config file and add to the transmit map.
+            cout << "Config files are not supported yet." << endl;
+            i++;
+        }
+        else if(_stricmp(argv[i], "--help") == 0)
+        {
+            // Dump some help to the screen
+            /// \todo When C++ifying arguments, this'll be far simpler
+            cout << "netkeys" << endl;
+            cout << "Copyright 2009 Matthew Iselin" << endl;
+            cout << endl;
+            cout << "Usage: netkeys [--client] [--ip addr] [--port port]" << endl;
+            cout << "               [--config file] [keys to transmit]:" << endl;
+            cout << endl;
+            cout << "--ip <location>:            Specifies a hostname or IP to connect to." << endl;
+            cout << "--port <port>:   (optional) Specifies a port to use when connecting." << endl;
+            cout << "--client:                   If specified, receives keys from the network" << endl;
+            cout << "                            and emulates them being pressed." << endl;
+            cout << "--config:        (optional) Specifies a configuration file to use." << endl;
+            cout << "                            Not implemented." << endl;
+            cout << endl;
+            cout << "When running without the --client option, add keys to the command line that" << endl;
+            cout << "you wish to transmit over the network. For example:" << endl;
+            cout << endl;
+            cout << "Primary computer (10.0.0.1):    `netkeys --ip 10.0.0.2 RCtrl`" << endl;
+            cout << "Secondary computer (10.0.0.2):  `netkeys --client`" << endl;
+            cout << endl;
+            cout << "The secondary computer will now receive and emulate presses of the Right" << endl;
+            cout << "Control key." << endl;
+            cout << endl;
+            return 0;
+        }
+        else
+        {
+            // If it's in the translation map, add it to the list of keys we
+            // are to transmit
+            DWORD vkCode = keyTranslations[string(argv[i])];
+            if(vkCode)
+                keysToTransmit[vkCode] = true;
+
+            cout << "Key translation for '" << string(argv[i]) << "': ";
+            cout << keyTranslations[string(argv[i])] << endl;
+        }
+    }
+
+    if(remoteIp == "" && !bClient)
+    {
+        cout << "No IP specified, quitting." << endl;
+        return 1;
+    }
+
+    if(bClient)
+    {
+        // We are the client, listen for key messages
+        listenForKeys();
+        returnSocket();
+        destroyWinsock();
+    }
+    else
+    {
+        // No, we're not the client. Hook and transmit keys.
+        hookAndSend();
+    }
+    return 0;
 }
