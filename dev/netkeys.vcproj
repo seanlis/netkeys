@@ -181,6 +181,10 @@
 				RelativePath="..\src\win_keytrans.h"
 				>
 			</File>
+			<File
+				RelativePath="..\src\x_keytrans.h"
+				>
+			</File>
 		</Filter>
 		<File
 			RelativePath="..\LICENSE"
@@ -188,6 +192,10 @@
 		</File>
 		<File
 			RelativePath="..\README"
+			>
+		</File>
+		<File
+			RelativePath="..\TODO"
 			>
 		</File>
 	</Files>
