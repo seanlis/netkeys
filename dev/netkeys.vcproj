@@ -169,11 +169,14 @@
 	<Files>
 		<Filter
 			Name="src"
-			Filter=""
 			UniqueIdentifier="{4FC737F1-C7A5-4376-A066-2A32D752A2FF}"
 			>
 			<File
 				RelativePath="..\src\netkeys.cpp"
+				>
+			</File>
+			<File
+				RelativePath="..\src\win_keytrans.h"
 				>
 			</File>
 		</Filter>
