@@ -52,9 +52,11 @@
 #include <stdint.h>
 #endif
 
+#ifdef _LINUX
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
 #include <X11/extensions/XTest.h>
+#endif
 
 using namespace std;
 
