@@ -14,6 +14,8 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#ifdef WIN32
+
 // netkeys targets a minimum platform of Windows 2000
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0500 // Minimum platform is Win 2000
@@ -21,6 +23,10 @@
 
 #include <winsock2.h>
 #include <windows.h>
+
+#define HAVE_STRCPY_S
+#endif
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <conio.h>
@@ -31,6 +37,10 @@
 #include <map>
 
 using namespace std;
+
+#ifndef HAVE_STRCPY_S
+#define strncpy_s(d, n, s, m) strncpy(d, s, m)
+#endif
 
 /**
  * MESSAGE_MAGIC serves two purposes: one, ensuring the correct structures
@@ -53,14 +63,19 @@ using namespace std;
  */
 struct keyMessage
 {
+    /** Magic number, to verify version and integrity */
     DWORD magic;
+
+    /** Action code */
     DWORD code;
-    DWORD key;
+
+    /** Name of key that was pressed (allows Linux to talk to Windows) */
+    char keyName[32];
 };
 
 /**
- * Translation from string to a VK_ keycode (Windows-specific). These will be
- * converted into a std::map and used to determine the set of keys to transmit.
+ * Translation from string to a keycode. These will be converted into a
+ * std::map and used to determine the set of keys to transmit.
  */
 struct keyTranslation
 {
@@ -68,7 +83,11 @@ struct keyTranslation
     DWORD vkCode;
     bool shouldRetransmit;
 } myTranslations[] = {
+#ifdef WIN32
 #include "win_keytrans.h"
+#elif defined(__linux__) || defined(linux) /// \todo This isn't exhaustive
+#include "x_keytrans.h"
+#endif
 };
 
 /**
@@ -108,6 +127,9 @@ map<DWORD, bool> keysToTransmit;
 
 /** Map of strings -> virtual key codes */
 map<string, DWORD> keyTranslations;
+
+/** Map of virtual key codes -> strings */
+map<DWORD, string> vkTranslations;
 
 /** Key states (to determine whether or not to send another message */
 map<DWORD, bool> keyState;
@@ -240,8 +262,8 @@ void listenForKeys()
         myInput.dwExtraInfo = 0;
         myInput.dwFlags = KEYEVENTF_EXTENDEDKEY;
         myInput.time = 0;
-        myInput.wVk = (WORD) s.key;
-        myInput.wScan = MapVirtualKey(s.key, MAPVK_VK_TO_VSC);
+        myInput.wVk = (WORD) keyTranslations[string(s.keyName)];
+        myInput.wScan = MapVirtualKey(myInput.wVk, MAPVK_VK_TO_VSC);
 
         if(s.code == MESSAGE_KEYUP)
             myInput.dwFlags |= KEYEVENTF_KEYUP;
@@ -268,7 +290,7 @@ LRESULT __declspec(dllexport)__stdcall  CALLBACK KeyboardProc(int nCode,
                     struct keyMessage s;
                     s.code = MESSAGE_KEYDOWN;
                     s.magic = MESSAGE_MAGIC;
-                    s.key = p->vkCode;
+                    strncpy_s(s.keyName, 32, vkTranslations[p->vkCode].c_str(), 32);
                     sendMessage((const char*) &s, sizeof(s));
                 }
             }
@@ -277,7 +299,7 @@ LRESULT __declspec(dllexport)__stdcall  CALLBACK KeyboardProc(int nCode,
                 struct keyMessage s;
                 s.code = MESSAGE_KEYUP;
                 s.magic = MESSAGE_MAGIC;
-                s.key = p->vkCode;
+                strncpy_s(s.keyName, 32, vkTranslations[p->vkCode].c_str(), 32);
                 sendMessage((const char*) &s, sizeof(s));
 
                 keyState[p->vkCode] = false;
@@ -428,6 +450,7 @@ int main(int argc, char* argv[])
     for(i = 0; i < (sizeof(myTranslations) / sizeof(myTranslations[0])); i++)
     {
         keyTranslations[myTranslations[i].keyName] = myTranslations[i].vkCode;
+        vkTranslations[myTranslations[i].vkCode] = myTranslations[i].keyName;
         keyRetransmit[myTranslations[i].vkCode] = myTranslations[i].shouldRetransmit;
     }
 
