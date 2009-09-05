@@ -44,11 +44,20 @@ AC_MSG_ERROR([X11 library present but keysym.h not found.])
 AC_CHECK_HEADER([X11/extensions/XTest.h], ,
 AC_MSG_ERROR([XTest library present but XTest.h not found.])
 )
+
+# TODO: Handle multiple different methods for sockets
 AC_CHECK_HEADERS([sys/socket.h], ,
 AC_MSG_ERROR([sys/socket.h not found.])
 )
-
-AC_FUNC_FORK
+AC_CHECK_HEADERS([netinet/in.h], ,
+AC_MSG_ERROR([netinet/in.h not found.])
+)
+AC_CHECK_HEADERS([arpa/inet.h], ,
+AC_MSG_ERROR([arpa/inet.h not found.])
+)
+AC_CHECK_HEADERS([netdb.h], ,
+AC_MSG_ERROR([netdb.h not found.])
+)
 
 AC_CHECK_FUNCS(strcpy_s)
 AC_CHECK_FUNCS(stricmp)

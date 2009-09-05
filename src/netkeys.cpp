@@ -84,6 +84,10 @@ typedef uint32_t DWORD;
 typedef uint16_t WORD;
 #endif
 
+#ifdef WIN32
+#define stricmp _stricmp
+#endif
+
 /**
  * MESSAGE_MAGIC serves two purposes: one, ensuring the correct structures
  * are in use, and two, ensuring that these structures are not malformed.
@@ -587,11 +591,11 @@ int main(int argc, char* argv[])
     bool bClient = false;
     for(i = 1; i < argc; i++)
     {
-        if(_stricmp(argv[i], "--client") == 0)
+        if(stricmp(argv[i], "--client") == 0)
         {
             bClient = true;
         }
-        else if(_stricmp(argv[i], "--ip") == 0)
+        else if(stricmp(argv[i], "--ip") == 0)
         {
             if((i + 1) < argc)
             {
@@ -604,7 +608,7 @@ int main(int argc, char* argv[])
                 return 1;
             }
         }
-        else if(_stricmp(argv[i], "--port") == 0)
+        else if(stricmp(argv[i], "--port") == 0)
         {
             bool bValid = false;
             if((i + 1) < argc)
@@ -622,13 +626,13 @@ int main(int argc, char* argv[])
                 return 1;
             }
         }
-        else if(_stricmp(argv[i], "--config") == 0)
+        else if(stricmp(argv[i], "--config") == 0)
         {
             /// \todo Read the config file and add to the transmit map.
             cout << "Config files are not supported yet." << endl;
             i++;
         }
-        else if(_stricmp(argv[i], "--help") == 0)
+        else if(stricmp(argv[i], "--help") == 0)
         {
             // Dump some help to the screen
             /// \todo When C++ifying arguments, this'll be far simpler
