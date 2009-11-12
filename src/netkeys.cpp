@@ -48,6 +48,8 @@
 #include <string>
 #include <map>
 
+using namespace std;
+
 #ifdef HAVE_STDINT_H
 #include <stdint.h>
 #endif
@@ -58,13 +60,11 @@
 #include <X11/extensions/XTest.h>
 #endif
 
-using namespace std;
-
 #ifndef HAVE_STRCPY_S
 #define strncpy_s(d, n, s, m) strncpy(d, s, m)
 #endif
 
-#ifndef HAVE_STRICMP
+#if !defined(HAVE_STRICMP) && !defined(WIN32)
 int stricmp(const char *a, const char *b)
 {
     while(*a && *b)
@@ -89,6 +89,12 @@ typedef uint16_t WORD;
 #ifdef WIN32
 #define stricmp _stricmp
 #endif
+
+/** Major version identifier */
+#define VER_MAJOR       0
+
+/** Minor version identifier */
+#define VER_MINOR       1
 
 /**
  * MESSAGE_MAGIC serves two purposes: one, ensuring the correct structures
@@ -187,7 +193,9 @@ map<DWORD, bool> keyRetransmit;
 /** KeyboardProc: Low-level keyboard hook handler */
 LRESULT __declspec(dllexport)__stdcall  CALLBACK KeyboardProc(int nCode,
                                                               WPARAM wParam,
-                                                              LPARAM lParam);
+                                                              LPARAM lParam);LRESULT __declspec(dllexport)__stdcall CALLBACK RegKeyboardProc(int code,
+                                                                WPARAM wParam,
+                                                                LPARAM lParam);
 /**
  * initWinsock
  *
@@ -242,30 +250,35 @@ void hookAndSend()
     connectRemote(remoteIp.c_str(), myPort);
 
 #ifdef WIN32
-
-    // Grab our window handle
+    // Grab our window handle (to take over the message pump
     HWND hWnd = GetConsoleWindow();
-    HINSTANCE hInst = (HINSTANCE) GetWindowLong(hWnd, GWL_HINSTANCE);
+    HINSTANCE hInst = (HINSTANCE) GetModuleHandle(NULL);
 
     // Spruce up the window
     SetConsoleTitle("netkeys");
 
-    // Install the hook
+    // Install the low-level hook
     myHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, hInst, 0);
     if(!myHook)
     {
-        cerr << "Obtaining the keyboard hook failed." << endl;
-        cerr << "Press any key to continue." << endl;
-        _getch();
-        return;
+        // If that failed, try a normal keyboard hook
+        myHook = SetWindowsHookEx(WH_KEYBOARD, RegKeyboardProc, hInst, 0);
+        if(!myHook)
+        {
+            cerr << "Obtaining the keyboard hook failed [" << GetLastError() << "]." << endl;
+            cerr << "Press any key to continue." << endl;
+            _getch();
+            return;
+        }
     }
-
 #elif defined(_LINUX)
     rootWindow = DefaultRootWindow(myDisplay);
     for(map<DWORD, bool>::iterator it = keysToTransmit.begin();
         it != keysToTransmit.end();
         ++it)
     {
+        /// \todo For some reason, this eats all keypresses, which is far from
+        ///       ideal.
         KeyCode key = XKeysymToKeycode(myDisplay, (*it).first);
         XGrabKey(myDisplay, key, AnyModifier, rootWindow, True, 
                  GrabModeAsync, GrabModeAsync);
@@ -413,6 +426,43 @@ LRESULT __declspec(dllexport)__stdcall  CALLBACK KeyboardProc(int nCode,
                 sendMessage((const char*) &s, sizeof(s));
 
                 keyState[p->vkCode] = false;
+            }
+        }
+    }
+    return CallNextHookEx(myHook, nCode, wParam, lParam);
+}
+
+LRESULT __declspec(dllexport)__stdcall CALLBACK RegKeyboardProc(int nCode,
+                                                                WPARAM wParam,
+                                                                LPARAM lParam)
+{
+    if(nCode == HC_ACTION)
+    {
+        WORD vkCode = wParam;
+        if(keysToTransmit[vkCode])
+        {
+            // Bit 31: Transition state. 0 if being pressed, 1 if being released.
+            if(!(lParam & (1 << 31)))
+            {
+                if(keyRetransmit[vkCode] || !keyState[vkCode])
+                {
+                    keyState[vkCode] = true;
+                    struct keyMessage s;
+                    s.code = MESSAGE_KEYDOWN;
+                    s.magic = MESSAGE_MAGIC;
+                    strncpy_s(s.keyName, 32, vkTranslations[vkCode].c_str(), 32);
+                    sendMessage((const char*) &s, sizeof(s));
+                }
+            }
+            if(lParam & (1 << 31))
+            {
+                struct keyMessage s;
+                s.code = MESSAGE_KEYUP;
+                s.magic = MESSAGE_MAGIC;
+                strncpy_s(s.keyName, 32, vkTranslations[vkCode].c_str(), 32);
+                sendMessage((const char*) &s, sizeof(s));
+
+                keyState[vkCode] = false;
             }
         }
     }
@@ -638,7 +688,7 @@ int main(int argc, char* argv[])
         {
             // Dump some help to the screen
             /// \todo When C++ifying arguments, this'll be far simpler
-            cout << "netkeys" << endl;
+            cout << "netkeys " << VER_MAJOR << "." << VER_MINOR << endl;
             cout << "Copyright 2009 Matthew Iselin" << endl;
             cout << endl;
             cout << "Usage: netkeys [--client] [--ip addr] [--port port]" << endl;
