@@ -280,7 +280,7 @@ HIDE_FRIEND_COMPOUNDS  = NO
 # If set to NO (the default) these blocks will be appended to the 
 # function's detailed documentation block.
 
-HIDE_IN_BODY_DOCS      = NO
+HIDE_IN_BODY_DOCS      = YES
 
 # The INTERNAL_DOCS tag determines if documentation 
 # that is typed after a \internal command is included. If the tag is set 
