@@ -23,6 +23,7 @@
 #include <netdb.h>
 
 #define SOCKET_ERROR (-1)
+#define SOCKET int
 
 #define SD_BOTH SHUT_RDWR
 #elif defined(WIN32)
@@ -161,7 +162,7 @@ Window rootWindow;
  * Probably not the greatest way in the world to do things. I'd like to C++
  * this up a bit.
  */
-int mySocket = -1;
+SOCKET mySocket = -1;
 
 /**
  * Port on which to communicate. Defaults to myPort unless a port is
@@ -217,7 +218,7 @@ int destroyWinsock();
 void death();
 
 /** getSocket: Set & return mySocket if not set, return it if so. */
-int getSocket();
+SOCKET getSocket();
 
 /** startListen: Listen on the given port */
 int startListen(int port);
@@ -441,7 +442,7 @@ LRESULT __declspec(dllexport)__stdcall CALLBACK RegKeyboardProc(int nCode,
 {
     if(nCode == HC_ACTION)
     {
-        WORD vkCode = wParam;
+        WORD vkCode = LOWORD(wParam);
         if(keysToTransmit[vkCode])
         {
             // Bit 31: Transition state. 0 if being pressed, 1 if being released.
@@ -522,7 +523,7 @@ int initWinsock()
 }
 #endif
 
-int getSocket()
+SOCKET getSocket()
 {
     if(mySocket == -1)
         mySocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
