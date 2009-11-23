@@ -22,8 +22,15 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
-#define SOCKET_ERROR (-1)
+/// Value returned in the case of an error when obtaining a socket
+#define SOCKET_ERROR_VALUE (-1)
+
+/// Type of a socket
 #define SOCKET int
+
+/// The type of ports for use with connect/bind
+/// \todo Should be determined by autoconf
+#define PORT_TYPE uint16_t
 
 #define SD_BOTH SHUT_RDWR
 #elif defined(WIN32)
@@ -38,6 +45,13 @@
 #include <conio.h>
 
 #define HAVE_STRCPY_S
+
+/// Value returned in the case of an error when obtaining a socket
+/// \note SOCKET_ERROR is already taken by Windows, *sigh*
+#define SOCKET_ERROR_VALUE (INVALID_SOCKET)
+
+/// The type of ports for use with connect/bind
+#define PORT_TYPE u_short
 #endif
 
 #include <stdlib.h>
@@ -162,13 +176,13 @@ Window rootWindow;
  * Probably not the greatest way in the world to do things. I'd like to C++
  * this up a bit.
  */
-SOCKET mySocket = -1;
+SOCKET mySocket = SOCKET_ERROR_VALUE;
 
 /**
  * Port on which to communicate. Defaults to myPort unless a port is
  * specified on the command line.
  */
-int myPort = SYSTEM_PORT;
+PORT_TYPE myPort = SYSTEM_PORT;
 
 /**
  * Remote IP for all networking.
@@ -221,7 +235,7 @@ void death();
 SOCKET getSocket();
 
 /** startListen: Listen on the given port */
-int startListen(int port);
+int startListen(PORT_TYPE port);
 
 /**
  * connectRemote
@@ -230,7 +244,7 @@ int startListen(int port);
  * UDP this is more or less defining the IP with which we'll be performing send
  * and recv operations.
  */
-int connectRemote(const char *host, int port);
+int connectRemote(const char *host, PORT_TYPE port);
 
 /** sendMessage: Sends the given message. */
 int sendMessage(const char *msg, int len);
@@ -379,7 +393,7 @@ void listenForKeys()
         myInput.dwFlags = 0;
         myInput.time = 0;
         myInput.wVk = (WORD) keyCode;
-        myInput.wScan = MapVirtualKey(keyCode, MAPVK_VK_TO_VSC);
+        myInput.wScan = (WORD) MapVirtualKey(keyCode, MAPVK_VK_TO_VSC);
 
         if(s.code == MESSAGE_KEYUP)
             myInput.dwFlags |= KEYEVENTF_KEYUP;
@@ -525,15 +539,15 @@ int initWinsock()
 
 SOCKET getSocket()
 {
-    if(mySocket == -1)
+    if(mySocket == SOCKET_ERROR_VALUE)
         mySocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 
     return mySocket;
 }
 
-int startListen(int port)
+int startListen(PORT_TYPE port)
 {
-    if(mySocket < 0)
+    if(mySocket == SOCKET_ERROR_VALUE)
         return -1;
 
     sockaddr_in service;
@@ -546,9 +560,9 @@ int startListen(int port)
     return 0;
 }
 
-int connectRemote(const char *host, int port)
+int connectRemote(const char *host, PORT_TYPE port)
 {
-    if(mySocket < 0)
+    if(mySocket == SOCKET_ERROR_VALUE)
         return -1;
 
     sockaddr_in service;
@@ -572,7 +586,7 @@ int connectRemote(const char *host, int port)
 
 int sendMessage(const char *msg, int len)
 {
-   if(mySocket < 0)
+   if(mySocket == SOCKET_ERROR_VALUE)
        return -1;
 
    return send(mySocket, msg, len, 0);
@@ -580,7 +594,7 @@ int sendMessage(const char *msg, int len)
 
 int recvMessage(char *buff, int msglen)
 {
-   if(mySocket < 0)
+   if(mySocket == SOCKET_ERROR_VALUE)
        return -1;
 
    return recv(mySocket, buff, msglen, 0);
@@ -670,7 +684,7 @@ int main(int argc, char* argv[])
             bool bValid = false;
             if((i + 1) < argc)
             {
-                myPort = atoi(argv[i + 1]);
+                myPort = (PORT_TYPE) atoi(argv[i + 1]);
                 i++;
 
                 if(myPort > 0 && myPort < 0xFFFF)
