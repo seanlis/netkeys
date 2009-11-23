@@ -130,6 +130,9 @@ typedef uint16_t WORD;
 /**
  * Packet structure for the key press/release message transfer.
  */
+#ifdef WIN32
+#pragma pack(push, 1)
+#endif
 struct keyMessage
 {
     /** Magic number, to verify version and integrity */
@@ -140,7 +143,14 @@ struct keyMessage
 
     /** Name of key that was pressed (allows Linux to talk to Windows) */
     char keyName[32];
-};
+}
+#ifdef _LINUX
+__attribute__((packed))
+#endif
+;
+#ifdef WIN32
+#pragma pack(pop)
+#endif
 
 /**
  * Translation from string to a keycode. These will be converted into a
@@ -384,13 +394,13 @@ void listenForKeys()
         }
 
         DWORD keyCode = keyTranslations[string(s.keyName)];
-#if WIN32
+#ifdef WIN32
         INPUT wrapper;
         wrapper.type = INPUT_KEYBOARD;
 
         KEYBDINPUT myInput;
         myInput.dwExtraInfo = 0;
-        myInput.dwFlags = 0;
+        myInput.dwFlags = KEYEVENTF_UNICODE;
         myInput.time = 0;
         myInput.wVk = (WORD) keyCode;
         myInput.wScan = (WORD) MapVirtualKey(keyCode, MAPVK_VK_TO_VSC);
@@ -399,7 +409,8 @@ void listenForKeys()
             myInput.dwFlags |= KEYEVENTF_KEYUP;
 
         wrapper.ki = myInput;
-        SendInput(1, &wrapper, sizeof(wrapper));
+        UINT ret = SendInput(1, &wrapper, sizeof(wrapper));
+        cout << "Return from SendInput: " << ret << ", last error: " << GetLastError() << endl;
 #elif defined(_LINUX)
 	    unsigned int kc = XKeysymToKeycode(myDisplay, keyCode);
 	    
@@ -623,6 +634,8 @@ int destroyWinsock()
 
 int main(int argc, char* argv[])
 {
+    cout << "Size of message structure: " << sizeof(keyMessage) << endl;
+
 #ifdef WIN32
     // Initialise Winsock and grab a socket
     if(initWinsock())
