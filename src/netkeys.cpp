@@ -193,9 +193,12 @@ map<DWORD, bool> keyRetransmit;
 /** KeyboardProc: Low-level keyboard hook handler */
 LRESULT __declspec(dllexport)__stdcall  CALLBACK KeyboardProc(int nCode,
                                                               WPARAM wParam,
-                                                              LPARAM lParam);LRESULT __declspec(dllexport)__stdcall CALLBACK RegKeyboardProc(int code,
+                                                              LPARAM lParam);
+
+LRESULT __declspec(dllexport)__stdcall CALLBACK RegKeyboardProc(int code,
                                                                 WPARAM wParam,
-                                                                LPARAM lParam);
+                                                                LPARAM lParam);
+
 /**
  * initWinsock
  *
@@ -372,10 +375,10 @@ void listenForKeys()
 
         KEYBDINPUT myInput;
         myInput.dwExtraInfo = 0;
-        myInput.dwFlags = KEYEVENTF_EXTENDEDKEY;
+        myInput.dwFlags = 0;
         myInput.time = 0;
         myInput.wVk = (WORD) keyCode;
-        myInput.wScan = MapVirtualKey(myInput.wVk, MAPVK_VK_TO_VSC);
+        myInput.wScan = MapVirtualKey(keyCode, MAPVK_VK_TO_VSC);
 
         if(s.code == MESSAGE_KEYUP)
             myInput.dwFlags |= KEYEVENTF_KEYUP;
@@ -641,6 +644,7 @@ int main(int argc, char* argv[])
     // Check for and handle input parameters
     /// \todo C++ify
     bool bClient = false;
+    bool bTest = false;
     for(i = 1; i < argc; i++)
     {
         if(stricmp(argv[i], "--client") == 0)
@@ -712,6 +716,12 @@ int main(int argc, char* argv[])
             cout << endl;
             return 0;
         }
+        else if(stricmp(argv[i], "--test") == 0)
+        {
+            // The --test option allows the hook acquire to be tested without
+            // requiring a full test environment (with multiple instances).
+            bTest = true;
+        }
         else
         {
             // If it's in the translation map, add it to the list of keys we
@@ -725,7 +735,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    if(remoteIp == "" && !bClient)
+    if(!bTest && (remoteIp == "" && !bClient))
     {
         cout << "No IP specified, quitting." << endl;
         return 1;
