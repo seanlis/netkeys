@@ -21,9 +21,14 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <signal.h>
+#include "config.h"
 
-/// Value returned in the case of an error when obtaining a socket
+/// An invalid socket is given this value
 #define SOCKET_ERROR_VALUE (-1)
+
+/// Error return from network functions
+#define SOCKET_ERROR (-1)
 
 /// Type of a socket
 #define SOCKET int
@@ -32,7 +37,15 @@
 /// \todo Should be determined by autoconf
 #define PORT_TYPE uint16_t
 
+/// Windows defined SD_BOTH, not SHUT_RDWR
 #define SD_BOTH SHUT_RDWR
+
+/// List of signals we want to capture for cleanup
+int signalsToHandle[] = {
+    SIGINT,
+    SIGHUP,
+    SIGTERM,
+};
 #elif defined(WIN32)
 
 // netkeys targets a minimum platform of Windows 2000
@@ -46,8 +59,7 @@
 
 #define HAVE_STRCPY_S
 
-/// Value returned in the case of an error when obtaining a socket
-/// \note SOCKET_ERROR is already taken by Windows, *sigh*
+/// An invalid socket is given this value
 #define SOCKET_ERROR_VALUE (INVALID_SOCKET)
 
 /// The type of ports for use with connect/bind
@@ -265,6 +277,40 @@ int recvMessage(char *buff, int msglen);
 /** returnSocket: Cleans up mySocket */
 int returnSocket();
 
+/** Installs a signal handler */
+#ifdef _LINUX
+void installSigHandler(int sig, void (*handler)(int))
+{
+#if HAVE_SIGACTION
+    // Try sigaction(2) first
+    struct sigaction act;
+    act.sa_handler = handler;
+    sigemptyset(&act.sa_mask);
+    act.sa_flags = 0;
+    sigaction(sig, &act, NULL);
+#elif HAVE_SIGNAL
+    // Nice and simple...
+    signal(sig, handler);
+#else
+    #error No way to install signal handlers on this system!
+#endif
+}
+
+/** Linux signal handler for any signals which end up terminating us. */
+void killsig(int a)
+{
+    // Use the default handler for this signal in case we hit a SIGSEGV and
+    // we need it to be handled by the kernel if it happens in death()
+    signal(a, SIG_DFL);
+
+    // Pretend our atexit handler got called ;)
+    death();
+
+    // Assuming all went well, pass on the signal properly this time
+    kill(getpid(), a);
+}
+#endif
+
 /**
  * hookAndSend
  *
@@ -330,34 +376,34 @@ void hookAndSend()
     for(;;)
     {
         XEvent ev;
-    	XNextEvent(myDisplay, &ev);
-    	KeySym code = XKeycodeToKeysym(myDisplay, ev.xkey.keycode, 0);
+        XNextEvent(myDisplay, &ev);
+        KeySym code = XKeycodeToKeysym(myDisplay, ev.xkey.keycode, 0);
         if(keysToTransmit[code])
         {
-    	    if(ev.type == KeyPress)
-    	    {
-                if(keyRetransmit[code] || !keyState[code])
-                {
-                    keyState[code] = true;
-                    
-                    struct keyMessage s;
-                    s.code = MESSAGE_KEYDOWN;
-                    s.magic = MESSAGE_MAGIC;
-                    strncpy_s(s.keyName, 32, vkTranslations[code].c_str(), 32);
-                    sendMessage((const char*) &s, sizeof(s));
-                }
-    	    }
-    	    else if(ev.type == KeyRelease)
-    	    {
-                struct keyMessage s;
-                s.code = MESSAGE_KEYUP;
-                s.magic = MESSAGE_MAGIC;
-                strncpy_s(s.keyName, 32, vkTranslations[code].c_str(), 32);
-                sendMessage((const char*) &s, sizeof(s));
-                
-                keyState[code] = false;
-    	    }
-    	}
+      	    if(ev.type == KeyPress)
+      	    {
+                  if(keyRetransmit[code] || !keyState[code])
+                  {
+                      keyState[code] = true;
+                      
+                      struct keyMessage s;
+                      s.code = MESSAGE_KEYDOWN;
+                      s.magic = MESSAGE_MAGIC;
+                      strncpy_s(s.keyName, 32, vkTranslations[code].c_str(), 32);
+                      sendMessage((const char*) &s, sizeof(s));
+                  }
+      	    }
+      	    else if(ev.type == KeyRelease)
+      	    {
+                  struct keyMessage s;
+                  s.code = MESSAGE_KEYUP;
+                  s.magic = MESSAGE_MAGIC;
+                  strncpy_s(s.keyName, 32, vkTranslations[code].c_str(), 32);
+                  sendMessage((const char*) &s, sizeof(s));
+                  
+                  keyState[code] = false;
+      	    }
+    	  }
     }
 #endif
 
@@ -410,16 +456,15 @@ void listenForKeys()
 
         wrapper.ki = myInput;
         UINT ret = SendInput(1, &wrapper, sizeof(wrapper));
-        cout << "Return from SendInput: " << ret << ", last error: " << GetLastError() << endl;
 #elif defined(_LINUX)
-	    unsigned int kc = XKeysymToKeycode(myDisplay, keyCode);
+        unsigned int kc = XKeysymToKeycode(myDisplay, keyCode);
 	    
-	    // Avoid sending the character if it's to come up now
-	    if(s.code != MESSAGE_KEYUP)
-    	    XTestFakeKeyEvent(myDisplay, kc, True, 0);
+        // Avoid sending the character if it's to come up now
+        if(s.code != MESSAGE_KEYUP)
+            XTestFakeKeyEvent(myDisplay, kc, True, 0);
         if(s.code == MESSAGE_KEYUP)
-	        XTestFakeKeyEvent(myDisplay, kc, False, 0);
-	    XFlush(myDisplay);
+            XTestFakeKeyEvent(myDisplay, kc, False, 0);
+        XFlush(myDisplay);
 #endif
     }
 }
@@ -508,6 +553,16 @@ void death()
     
     destroyWinsock();
 #elif defined(_LINUX)
+    // Ungrab any keys we had grabbed
+    for(map<DWORD, bool>::iterator it = keysToTransmit.begin();
+        it != keysToTransmit.end();
+        ++it)
+    {
+        KeyCode key = XKeysymToKeycode(myDisplay, (*it).first);
+        XUngrabKey(myDisplay, key, AnyModifier, rootWindow);
+    }
+
+    // And now close the display
     XCloseDisplay(myDisplay);
 #endif
 }
@@ -634,8 +689,6 @@ int destroyWinsock()
 
 int main(int argc, char* argv[])
 {
-    cout << "Size of message structure: " << sizeof(keyMessage) << endl;
-
 #ifdef WIN32
     // Initialise Winsock and grab a socket
     if(initWinsock())
@@ -655,9 +708,16 @@ int main(int argc, char* argv[])
         cout << "Couldn't access the X server (display 0)." << endl;
         return 1;
     }
+
+    // Install the death handler for termination signals
+    for(int i = 0; i < (sizeof(signalsToHandle)/sizeof(signalsToHandle[0])); i++)
+    {
+        signal(signalsToHandle[i], killsig);
+    }
 #endif
 
-    // Install cleanup to run when we die
+    // Install cleanup to run when we terminate (Windows' CTRL-C runs this
+    // but *nix's doesn't, different ways of performing the same action...)
     atexit(death);
 
     // Setup the translation map
