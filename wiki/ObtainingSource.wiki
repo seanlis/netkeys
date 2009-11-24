@@ -7,7 +7,7 @@ You need the following in order to check out and build the source code:
   * An SVN client. [http://tortoisesvn.tigris.org/ TortoiseSVN] for Windows is a fantastic little client, and most Linux distributions will have a client available somewhere.
   * Visual Studio 2008 on Windows (no IDE required on Linux)
   * GNU Make, Autoconf, and Automake on Linux
-  * X11 header files and libraries on Linux
+  * X11 header files and libraries on Linux (as well as the XTest library)
 
 == Process ==
 
