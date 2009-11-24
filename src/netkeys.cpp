@@ -455,7 +455,7 @@ void listenForKeys()
             myInput.dwFlags |= KEYEVENTF_KEYUP;
 
         wrapper.ki = myInput;
-        UINT ret = SendInput(1, &wrapper, sizeof(wrapper));
+        SendInput(1, &wrapper, sizeof(wrapper));
 #elif defined(_LINUX)
         unsigned int kc = XKeysymToKeycode(myDisplay, keyCode);
 	    
@@ -546,11 +546,33 @@ LRESULT __declspec(dllexport)__stdcall CALLBACK RegKeyboardProc(int nCode,
 
 void death()
 {
+    // Send a keyup message for every key we're sending, in case we die with a
+    // key held down
+    for(map<DWORD, bool>::iterator it = keysToTransmit.begin();
+        it != keysToTransmit.end();
+        ++it)
+    {
+        DWORD key = (*it).first;
+        if(keyState[key])
+        {
+            keyState[key] = false;
+            struct keyMessage s;
+            s.code = MESSAGE_KEYUP;
+            s.magic = MESSAGE_MAGIC;
+            strncpy_s(s.keyName, 32, vkTranslations[key].c_str(), 32);
+            sendMessage((const char*) &s, sizeof(s));
+        }
+    }
+
+    // Clean up the socket
     returnSocket();
+
 #ifdef WIN32
+    // Remove whatever hook we obtained
     if(myHook)
         UnhookWindowsHookEx(myHook);
     
+    // Clean up winsock
     destroyWinsock();
 #elif defined(_LINUX)
     // Ungrab any keys we had grabbed
@@ -563,6 +585,7 @@ void death()
     }
 
     // And now close the display
+    // Close the X display connection
     XCloseDisplay(myDisplay);
 #endif
 }
@@ -685,6 +708,12 @@ int destroyWinsock()
 {
     return WSACleanup();
 }
+
+BOOL WINAPI CtrlHandler(DWORD)
+{
+    death();
+    return FALSE;
+}
 #endif
 
 int main(int argc, char* argv[])
@@ -698,6 +727,9 @@ int main(int argc, char* argv[])
         _getch();
         return 1;
     }
+
+    // Install unexpected exit handler
+    SetConsoleCtrlHandler(CtrlHandler, TRUE);
 #endif
     getSocket();
 
@@ -716,8 +748,7 @@ int main(int argc, char* argv[])
     }
 #endif
 
-    // Install cleanup to run when we terminate (Windows' CTRL-C runs this
-    // but *nix's doesn't, different ways of performing the same action...)
+    // Install cleanup to run when we terminate gracefully
     atexit(death);
 
     // Setup the translation map
