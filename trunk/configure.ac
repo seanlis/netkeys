@@ -58,9 +58,14 @@ AC_MSG_ERROR([arpa/inet.h not found.])
 AC_CHECK_HEADERS([netdb.h], ,
 AC_MSG_ERROR([netdb.h not found.])
 )
+AC_CHECK_HEADERS([signal.h], ,
+AC_MSG_ERROR([signal.h not found.])
+)
 
 AC_CHECK_FUNCS(strcpy_s)
 AC_CHECK_FUNCS(stricmp)
+AC_CHECK_FUNCS(sigaction)
+AC_CHECK_FUNCS(signal)
 
 AC_CONFIG_FILES(Makefile)
 AC_OUTPUT
