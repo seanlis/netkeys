@@ -1,0 +1,2 @@
+## The List ##
+  * Known protocol deficiency: 32-bit versions of netkeys may be unable to communicate with 64-bit versions. This is merely a portability issue, and will be fixed in the next version of netkeys. A workaround is to run the 32-bit version of netkeys under your 64-bit system.
